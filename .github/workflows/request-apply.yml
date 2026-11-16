@@ -1,0 +1,208 @@
+name: request-apply
+
+# Two ways in, one pipeline:
+#   push to main       a request PR was merged (the Git-native front door)
+#   workflow_dispatch  any other front door (for example ServiceNow) names the
+#                      request file and, optionally, the PR to report back to
+# Nothing is created until the "apply" job is approved in the aws-apply
+# environment, and it applies the exact plan made before the approval.
+on:
+  push:
+    branches: [main]
+    paths: ["requests/**"]
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: "Request file, e.g. requests/dev/demo-app-01.tfvars.json"
+        required: true
+        type: string
+      pr_number:
+        description: "PR number to report the result to (optional)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.17.2" # keep equal to required_version in the .tf files
+  TF_IN_AUTOMATION: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      scope: ${{ steps.detect.outputs.scope }}
+      request_file: ${{ steps.detect.outputs.request_file }}
+      request_id: ${{ steps.detect.outputs.request_id }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      INPUT_REQUEST_FILE: ${{ inputs.request_file }}
+      INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+      BEFORE_SHA: ${{ github.event.before }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Also checks the request file again: the merged content is what will be built.
+      - name: Detect the request
+        id: detect
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            python3 scripts/detect_request.py --request-file "$INPUT_REQUEST_FILE"
+          else
+            python3 scripts/detect_request.py --base "$BEFORE_SHA" --head "$GITHUB_SHA"
+          fi
+
+      - name: Find the PR to report back to
+        id: pr
+        if: steps.detect.outputs.scope == 'request'
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            pr="$INPUT_PR_NUMBER"
+          else
+            pr=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '.[0].number // empty')
+          fi
+          case "$pr" in *[!0-9]*) pr="" ;; esac # digits only
+          echo "pr_number=$pr" >> "$GITHUB_OUTPUT"
+
+  plan:
+    needs: prepare
+    if: needs.prepare.outputs.scope == 'request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      REQUEST_FILE: ${{ needs.prepare.outputs.request_file }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-plan-${{ needs.prepare.outputs.request_id }}-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: ./.github/actions/terraform-init
+        with:
+          request-id: ${{ needs.prepare.outputs.request_id }}
+          bucket: ${{ vars.STATE_BUCKET }}
+          region: ${{ vars.AWS_REGION }}
+
+      - name: terraform plan
+        run: |
+          terraform -chdir=stacks/aws-ec2-vm plan -input=false -no-color -lock=false \
+            -var-file="$GITHUB_WORKSPACE/$REQUEST_FILE" \
+            -var "aws_region=${{ vars.AWS_REGION }}" \
+            -var "source_repo=$GITHUB_REPOSITORY" \
+            -var "source_pr=${{ needs.prepare.outputs.pr_number || 'n/a' }}" \
+            -var "source_commit=$GITHUB_SHA" \
+            -out=tfplan 2>&1 | tee plan.log
+          terraform -chdir=stacks/aws-ec2-vm show -no-color tfplan > plan.txt
+          head -c 60000 plan.txt >> "$GITHUB_STEP_SUMMARY"
+
+      # The saved plan is what the approver releases. Apply uses it unchanged.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: plan
+          path: |
+            stacks/aws-ec2-vm/tfplan
+            plan.log
+          retention-days: 7
+
+  apply:
+    needs: [prepare, plan]
+    runs-on: ubuntu-latest
+    # Second gate. Configure required reviewers on this environment and limit its
+    # deployment branches to main. Its approval record is part of the audit trail.
+    environment: aws-apply
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-session-name: gha-apply-${{ needs.prepare.outputs.request_id }}-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: ./.github/actions/terraform-init
+        with:
+          request-id: ${{ needs.prepare.outputs.request_id }}
+          bucket: ${{ vars.STATE_BUCKET }}
+          region: ${{ vars.AWS_REGION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+
+      # Terraform refuses to apply (rather than guess) if state changed since the plan.
+      - name: terraform apply
+        run: |
+          terraform -chdir=stacks/aws-ec2-vm apply -input=false -no-color tfplan 2>&1 | tee apply.log
+          terraform -chdir=stacks/aws-ec2-vm output -json > outputs.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apply
+          path: |
+            apply.log
+            outputs.json
+          retention-days: 30
+
+  report:
+    needs: [prepare, apply]
+    # Report every outcome: success, failure, or a rejected approval.
+    if: always() && needs.prepare.outputs.scope == 'request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Logs and outputs from the plan and apply jobs, whichever exist.
+      - uses: actions/download-artifact@v4
+        with:
+          path: result
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Build and post the result
+        run: |
+          python3 scripts/build_comment.py result \
+            --request-file "${{ needs.prepare.outputs.request_file }}" \
+            --status "${{ needs.apply.result }}" \
+            --result-dir result --pr "$PR_NUMBER" > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "$PR_NUMBER" ]; then
+            bash scripts/post_comment.sh "$PR_NUMBER" result comment.md
+          fi

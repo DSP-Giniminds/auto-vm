@@ -1,0 +1,30 @@
+# Terraform: working data, state and plans must never be committed.
+# (.terraform.lock.hcl IS committed on purpose, to pin provider versions.)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Local variable files (request files, *.tfvars.json, are NOT matched)
+terraform.tfvars
+*.auto.tfvars
+
+# Secrets and local pipeline output
+.env
+*.pem
+*.key
+plan.log
+plan.txt
+
+# Python
+__pycache__/
+
+# Local working notes, not part of the repo
+context.md
+docs/

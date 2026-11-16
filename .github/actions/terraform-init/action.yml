@@ -1,0 +1,28 @@
+name: terraform-init
+description: >
+  Initialise stacks/aws-ec2-vm against the S3 backend. The state key comes from
+  the request ID, so each request has its own state file and lock.
+
+inputs:
+  request-id:
+    description: request_id from the request file
+    required: true
+  bucket:
+    description: State bucket (STATE_BUCKET variable)
+    required: true
+  region:
+    description: Bucket region (AWS_REGION variable)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: terraform init
+      shell: bash
+      run: |
+        terraform -chdir=stacks/aws-ec2-vm init -input=false -no-color \
+          -backend-config="bucket=${{ inputs.bucket }}" \
+          -backend-config="key=aws-ec2-vm/${{ inputs.request-id }}/terraform.tfstate" \
+          -backend-config="region=${{ inputs.region }}" \
+          -backend-config="encrypt=true" \
+          -backend-config="use_lockfile=true"

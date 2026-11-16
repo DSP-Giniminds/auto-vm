@@ -1,0 +1,127 @@
+name: request-plan
+
+# Runs on every pull request, with no path filter, so its checks can be made
+# "required" without blocking unrelated PRs. It never creates anything.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: request-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.17.2" # keep equal to required_version in the .tf files
+  TF_IN_AUTOMATION: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      scope: ${{ steps.detect.outputs.scope }}
+      request_file: ${{ steps.detect.outputs.request_file }}
+      request_id: ${{ steps.detect.outputs.request_id }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # One request per PR, never mixed with modules, stacks or workflows, and the
+      # request file itself must be complete. Problems are copied to validation.md so they can be posted on the PR.
+      - name: Detect what this PR changes
+        id: detect
+        run: |
+          python3 scripts/detect_request.py \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}" 2>&1 | tee -a validation.md
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -no-color
+
+      - name: terraform validate
+        run: |
+          for dir in bootstrap modules/aws-ec2-vm stacks/aws-ec2-vm; do
+            terraform -chdir="$dir" init -backend=false -input=false -no-color
+            terraform -chdir="$dir" validate -no-color
+          done
+
+      - name: Tell the PR why the request was rejected
+        if: failure()
+        run: |
+          # validation.md only has content when detect or validate found problems.
+          if [ -s validation.md ]; then
+            { echo "Fix these and push again:"; echo; cat validation.md; } > problems.md
+            python3 scripts/build_comment.py problem --title "Request rejected" --text-file problems.md > comment.md
+            bash scripts/post_comment.sh "${{ github.event.pull_request.number }}" validation comment.md
+          fi
+
+  plan:
+    needs: validate
+    if: needs.validate.outputs.scope == 'request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC token for the read-only plan role
+      contents: read
+      pull-requests: write
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      REQUEST_FILE: ${{ needs.validate.outputs.request_file }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-plan-${{ needs.validate.outputs.request_id }}-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: ./.github/actions/terraform-init
+        with:
+          request-id: ${{ needs.validate.outputs.request_id }}
+          bucket: ${{ vars.STATE_BUCKET }}
+          region: ${{ vars.AWS_REGION }}
+
+      # -lock=false: a plan never changes state, and the plan role is read-only.
+      - name: terraform plan
+        run: |
+          terraform -chdir=stacks/aws-ec2-vm plan -input=false -no-color -lock=false \
+            -var-file="$GITHUB_WORKSPACE/$REQUEST_FILE" \
+            -var "aws_region=${{ vars.AWS_REGION }}" \
+            -var "source_repo=$GITHUB_REPOSITORY" \
+            -var "source_pr=$PR_NUMBER" \
+            -var "source_commit=pending-merge" \
+            -out=tfplan 2>&1 | tee plan.log
+          terraform -chdir=stacks/aws-ec2-vm show -no-color tfplan > plan.txt
+
+      - name: Post the plan on the PR
+        run: |
+          python3 scripts/build_comment.py plan --request-file "$REQUEST_FILE" --plan-file plan.txt > comment.md
+          bash scripts/post_comment.sh "$PR_NUMBER" plan comment.md
+
+      - name: Post the failure on the PR
+        if: failure()
+        run: |
+          python3 scripts/build_comment.py problem --title "Plan failed" --text-file plan.log > comment.md
+          bash scripts/post_comment.sh "$PR_NUMBER" plan comment.md

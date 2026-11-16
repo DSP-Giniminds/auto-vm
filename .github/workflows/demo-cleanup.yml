@@ -1,0 +1,81 @@
+name: demo-cleanup
+
+# FOR THE DEMO ONLY. Destroys the VM of ONE request, after approval in the
+# aws-apply environment. This is not a decommissioning feature: the request file
+# stays in Git as the record, and running request-apply for it again recreates
+# the same VM.
+on:
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: "Request file, e.g. requests/dev/demo-app-01.tfvars.json"
+        required: true
+        type: string
+      confirm_request_id:
+        description: "Type the request_id from that file to confirm, e.g. REQ-0001"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.17.2" # keep equal to required_version in the .tf files
+  TF_IN_AUTOMATION: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  destroy:
+    # Only the reviewed pipeline on main may destroy anything.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: aws-apply
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      REQUEST_FILE: ${{ inputs.request_file }}
+      CONFIRM_ID: ${{ inputs.confirm_request_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the request
+        id: detect
+        run: |
+          python3 scripts/detect_request.py --request-file "$REQUEST_FILE"
+
+      # A separate step: outputs of a step are only available to later steps.
+      - name: Check the confirmation
+        env:
+          REQUEST_ID: ${{ steps.detect.outputs.request_id }}
+        run: |
+          if [ "$REQUEST_ID" != "$CONFIRM_ID" ]; then
+            echo "::error::\"$CONFIRM_ID\" does not match the request_id in $REQUEST_FILE."
+            exit 1
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-session-name: gha-destroy-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: ./.github/actions/terraform-init
+        with:
+          request-id: ${{ steps.detect.outputs.request_id }}
+          bucket: ${{ vars.STATE_BUCKET }}
+          region: ${{ vars.AWS_REGION }}
+
+      - name: terraform destroy
+        run: |
+          terraform -chdir=stacks/aws-ec2-vm destroy -input=false -no-color -auto-approve \
+            -var-file="$GITHUB_WORKSPACE/$REQUEST_FILE" \
+            -var "aws_region=${{ vars.AWS_REGION }}"
