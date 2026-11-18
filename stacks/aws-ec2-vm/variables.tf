@@ -46,13 +46,15 @@ variable "root_volume_gb" {
 }
 
 variable "subnet_id" {
-  description = "Existing subnet ID."
+  description = "Existing subnet ID. Null = default VPC."
   type        = string
+  default     = null
 }
 
 variable "security_group_ids" {
-  description = "Existing security group IDs."
+  description = "Existing security group IDs. Empty = default SG."
   type        = list(string)
+  default     = []
 }
 
 variable "assign_public_ip" {

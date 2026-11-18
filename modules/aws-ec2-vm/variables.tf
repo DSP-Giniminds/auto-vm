@@ -95,22 +95,24 @@ variable "root_volume_gb" {
 }
 
 variable "subnet_id" {
-  description = "Existing subnet. Passed in, not created."
+  description = "Existing subnet. Null = default subnet of the default VPC."
   type        = string
+  default     = null
 
   validation {
-    condition     = can(regex("^subnet-[0-9a-f]{8,17}$", var.subnet_id))
+    condition     = var.subnet_id == null || can(regex("^subnet-[0-9a-f]{8,17}$", var.subnet_id))
     error_message = "subnet_id must look like subnet-0123456789abcdef0."
   }
 }
 
 variable "security_group_ids" {
-  description = "Existing security groups. Passed in, not created."
+  description = "Existing security groups. Empty = default security group."
   type        = list(string)
+  default     = []
 
   validation {
-    condition     = length(var.security_group_ids) > 0 && alltrue([for sg in var.security_group_ids : can(regex("^sg-[0-9a-f]{8,17}$", sg))])
-    error_message = "security_group_ids needs at least one ID, each like sg-0123456789abcdef0."
+    condition     = alltrue([for sg in var.security_group_ids : can(regex("^sg-[0-9a-f]{8,17}$", sg))])
+    error_message = "Each security group ID must look like sg-0123456789abcdef0."
   }
 }
 

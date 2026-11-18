@@ -41,8 +41,8 @@ def spec_table(request):
         "Instance type": request["instance_type"],
         "OS": request["os"],
         "Root volume": f"{request['root_volume_gb']} GB gp3, encrypted",
-        "Subnet": request["subnet_id"],
-        "Security groups": ", ".join(request["security_group_ids"]),
+        "Subnet": request.get("subnet_id", "default VPC subnet"),
+        "Security groups": ", ".join(request.get("security_group_ids", [])) or "default SG",
         "Public IP": "yes" if request.get("assign_public_ip") else "no",
     }
     return "\n".join(["| Field | Value |", "|---|---|"] + [f"| {k} | `{v}` |" for k, v in rows.items()])

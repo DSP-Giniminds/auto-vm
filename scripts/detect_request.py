@@ -24,7 +24,7 @@ from common import FRAMEWORK_FILES, REQUEST_PATH_RE, fail, load_json, set_output
 
 REQUIRED_FIELDS = [
     "request_id", "target", "vm_name", "requester", "environment", "instance_type",
-    "os", "root_volume_gb", "subnet_id", "security_group_ids", "justification",
+    "os", "root_volume_gb", "justification",
 ]
 SUPPORTED_TARGETS = {"aws-ec2"}  # add "vmware" etc. when another stack exists
 

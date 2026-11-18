@@ -19,7 +19,7 @@ resource "aws_instance" "this" {
   ami                         = data.aws_ssm_parameter.ami.insecure_value
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
-  vpc_security_group_ids      = var.security_group_ids
+  vpc_security_group_ids      = length(var.security_group_ids) > 0 ? var.security_group_ids : null
   associate_public_ip_address = var.assign_public_ip
 
   # IMDSv2 only: blocks the common SSRF-to-credentials path.
