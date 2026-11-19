@@ -2,12 +2,12 @@
 # approval gate. Replace the placeholders with real GitHub users or teams.
 
 # Request files: the approving manager(s).
-/requests/                      @gini-charan/DSP-Giniminds
+/requests/                      @gini-charan
 
 # Everything that defines HOW VMs are built or approved: the platform owner(s).
 # Keeping these separate stops an approver from changing the rules in a request PR.
-/modules/                       @SubramanyaGiniminds/DSP-Giniminds
-/stacks/                        @SubramanyaGiniminds/DSP-Giniminds
-/bootstrap/                     @SubramanyaGiniminds/DSP-Giniminds
-/scripts/                       @SubramanyaGiniminds/DSP-Giniminds
-/.github/                       @SubramanyaGiniminds/DSP-Giniminds
+/modules/                       @SubramanyaGiniminds
+/stacks/                        @SubramanyaGiniminds
+/bootstrap/                     @SubramanyaGiniminds
+/scripts/                       @SubramanyaGiniminds
+/.github/                       @SubramanyaGiniminds
