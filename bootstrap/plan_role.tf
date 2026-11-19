@@ -2,6 +2,7 @@
 # plan job on main (which runs before the approval gate).
 
 data "aws_iam_policy_document" "plan_trust" {
+    #checkov:skip=CKV_AWS_356: ec2:Describe* and the EBS default-key reads do not support resource-level permissions, so "*" is the only valid value
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 

@@ -16,6 +16,9 @@ data "aws_ssm_parameter" "ami" {
 }
 
 resource "aws_instance" "this" {
+  #checkov:skip=CKV_AWS_126: detailed (1 minute) monitoring is a paid feature; basic monitoring is enough for this PoC
+  #checkov:skip=CKV_AWS_135: t2.micro (allowed type) does not support EBS optimization, and t3 is optimized by default
+  #checkov:skip=CKV2_AWS_41: the VM needs no AWS API access, so no instance profile is attached (least privilege)
   ami                         = data.aws_ssm_parameter.ami.insecure_value
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
