@@ -2,6 +2,12 @@
 # DynamoDB table is needed.
 
 resource "aws_s3_bucket" "state" {
+  # Accepted risks for the PoC state bucket (it only holds Terraform state):
+  #checkov:skip=CKV_AWS_18: access logging needs a second log bucket; S3 data events can be added through CloudTrail if wanted
+  #checkov:skip=CKV_AWS_144: single-region PoC, cross-region replication is not needed
+  #checkov:skip=CKV_AWS_145: SSE-S3 (AES256) is accepted; a customer-managed KMS key adds cost and a key policy to maintain
+  #checkov:skip=CKV2_AWS_61: old state versions are kept on purpose, no lifecycle rule (see bootstrap notes)
+  #checkov:skip=CKV2_AWS_62: no consumer of bucket events exists, notifications are not needed
   bucket = local.bucket_name
 
   lifecycle {
