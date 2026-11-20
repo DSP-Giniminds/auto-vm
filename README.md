@@ -1,4 +1,4 @@
-k# auto-vm: governed VM requests with Terraform and GitHub Actions
+# auto-vm: governed VM requests with Terraform and GitHub Actions
 
 ## What this is
 
