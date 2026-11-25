@@ -2,7 +2,7 @@
 # approval gate. Replace the placeholders with real GitHub users or teams.
 
 # Request files: the approving manager(s).
-/requests/                      @gini-charan
+/requests/                      @dsp-srnow-approver @gini-charan
 
 # Everything that defines HOW VMs are built or approved: the platform owner(s).
 # Keeping these separate stops an approver from changing the rules in a request PR.
